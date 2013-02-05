@@ -1,0 +1,4 @@
+virtualenv .virt
+. .virt/bin/activate
+python setup.py develop
+
