@@ -60,6 +60,7 @@ class Beaconer(object):
 
         self.broadcaster.bind(('', self.broadcast_port))
 
+        # start all worker greenlets
         gevent.joinall(
             [gevent.spawn(self._send_beacon),
              gevent.spawn(self._recv_beacon),
@@ -75,8 +76,6 @@ class Beaconer(object):
                 log.exception('Error recving beacon:')
                 gevent.sleep(self.beacon_interval) # don't busy error loop
                 continue
-            if len(data) != beacon.size:
-                continue
             try:
                 greet, ver, peer_id, peer_port = beacon.unpack(data)
             except Exception:
@@ -85,7 +84,7 @@ class Beaconer(object):
                 continue
             if peer_id == self.me:
                 continue
-            self.handle_peer(peer_id, addr[0], peer_port)
+            self.handle_beacon(peer_id, addr[0], peer_port)
 
     def _send_beacon(self):
         """Greenlet that sends udp beacons at intervals.
@@ -98,10 +97,12 @@ class Beaconer(object):
             except socket.error:
                 log.exception('Error sending beacon:')
             gevent.sleep(self.beacon_interval)
+            # check for deadbeats
             now = time.time()
             for peer_id in self.peers.keys():
                 peer = self.peers[peer_id]
                 if now - peer.time > self.dead_interval:
+                    log.debug('Deadbeat: %s' % uuid.UUID(bytes=peer_id))
                     peer.socket.close()
                     del self.peers[peer_id]
 
@@ -112,12 +113,12 @@ class Beaconer(object):
         while True:
             self.handle_msg(self.router.recv_multipart())
 
-    def handle_peer(self, peer_id, addr, port):
-        """ Handle a new peer.
+    def handle_beacon(self, peer_id, addr, port):
+        """ Handle a beacon.
 
         Overide this method to handle new peers.  By default, connects
         a DEALER socket to the new peers broadcast endpoint and
-        registers it in a dictionary.
+        registers it.
         """
         peer_addr = 'tcp://%s:%s' % (addr, port)
         peer = self.peers.get(peer_id)
@@ -125,20 +126,23 @@ class Beaconer(object):
             self.peers[peer_id] = peer._replace(time=time.time())
             return
         elif peer:
+            # we have the peer, but it's addr changed,
+            # close it, we'll reconnect
             self.peers[peer_id].socket.close()
 
+        # connect DEALER to peer_addr address from beacon
         peer = self.context.socket(zmq.DEALER)
         peer.setsockopt(zmq.IDENTITY, self.me)
-        
-        log.info('conecting to: %s at %s' % 
-                 (str(uuid.UUID(bytes=peer_id)), peer_addr))
+
+        uid = uuid.UUID(bytes=peer_id)
+        log.info('conecting to: %s at %s' % (uid, peer_addr))
         peer.connect(peer_addr)
         self.peers[peer_id] = Peer(peer, peer_addr, time.time())
 
     def handle_msg(self, peer_id, msg):
         """Override this method to customize message handling.
 
-        Defaults to calling the callback, if it exists.
+        Defaults to calling the callback.
         """
         peer = self.peers.get(peer_id)
         if peer:
@@ -157,5 +161,5 @@ if __name__ == '__main__':
     p = Beaconer(my_callback)
     g = gevent.spawn(p.start)
     s = gevent.sleep
-    if len(sys.argv) > 1: 
+    if len(sys.argv) > 1:
         g.join()
