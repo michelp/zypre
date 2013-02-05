@@ -3,7 +3,7 @@ from setuptools import setup
 with open('VERSION', 'rb') as version_file:
     version = version_file.read().strip()
 
-setup(name='zyper',
+setup(name='zypre',
       version=version,
       description='Python ZRE protocol implementation',
       long_description=" ".join("""
@@ -17,7 +17,6 @@ setup(name='zyper',
         pyzmq
         gevent
         """,
-        },
 
       keywords="python zeromq 0mq pyzmq gevent distributed",
       classifiers=[

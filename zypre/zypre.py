@@ -99,7 +99,7 @@ class Beaconer(object):
                 log.exception('Error sending beacon:')
             gevent.sleep(self.beacon_interval)
             now = time.time()
-            for peer_id in peers.keys():
+            for peer_id in self.peers.keys():
                 peer = self.peers[peer_id]
                 if now - peer.time > self.dead_interval:
                     peer.socket.close()
