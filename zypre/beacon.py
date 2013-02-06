@@ -103,22 +103,22 @@ class Beaconer(object):
                 log.exception('Error recving beacon:')
                 gevent.sleep(self.beacon_interval) # don't busy error loop
                 continue
-            if len(data) == beaconv1.size:
-                continue
-                try:
+            try:
+                if len(data) == beaconv1.size:
                     greet, ver, peer_id, peer_port = beaconv2.unpack(data)
                     peer_transport = 1
                     peer_socket_type = zmq.ROUTER
                     peer_socket_address = NULL_IP
-                except Exception:
-                    continue
-            else:
-                try:
+                    if ver != 1:
+                        continue
+                else:
                     greet, ver, peer_id, peer_port, \
                         peer_transport, peer_socket_type, \
                         peer_socket_address = beaconv2.unpack(data)
-                except Exception:
-                    continue
+                    if ver != 2:
+                        continue
+            except Exception:
+                continue
             if greet != 'ZRE':
                 continue
             if peer_id == self.me:
@@ -135,7 +135,7 @@ class Beaconer(object):
         while True:
             try:
                 beacon = beaconv2.pack(
-                    'ZRE', 1, self.me,
+                    'ZRE', 2, self.me,
                     self.service_port,
                     T_TO_I[self.service_transport],
                     self.service_socket_type,
