@@ -12,10 +12,20 @@ from collections import namedtuple
 import gevent
 from zmq import green as zmq
 
-beacon = struct.Struct('3sB16sH')
+beaconv1 = struct.Struct('3sB16sH')
+beaconv2 = struct.Struct('3sB16sHBB4s')
+
 Peer = namedtuple('Peer', ['socket', 'addr', 'time'])
 
 log = logging.getLogger(__name__)
+
+T_TO_I = {'tcp': 1,
+          'pgm': 2,
+          }
+
+I_TO_T = {v: k for k, v in T_TO_I.items()}
+
+NULL_IP = '\x00' * 4
 
 
 class Beaconer(object):
@@ -24,24 +34,41 @@ class Beaconer(object):
     This implements only the base UDP beaconing 0mq socket
     interconnection layer, and disconnected peer detection.
     """
+    service_port = None
 
-    def __init__(self, callback, address='*', broadcast_port=35713,
-                 beacon_interval=1, dead_interval=60):
+    def __init__(self, callback,
+                 broadcast_addr='',
+                 broadcast_port=35713,
+                 service_addr='*',
+                 service_transport='tcp',
+                 service_socket_type=zmq.ROUTER,
+                 beacon_interval=1,
+                 dead_interval=30):
         self.callback = callback
-        self.endpoint = 'tcp://%s' % address
+        self.broadcast_addr = broadcast_addr
         self.broadcast_port = broadcast_port
+        self.service_addr = service_addr
+        self.service_transport = service_transport
+        self.service_socket_type = service_socket_type
         self.beacon_interval = beacon_interval
         self.dead_interval = dead_interval
+
         self.peers = {}
+        if service_addr != '*':
+            self.service_addr_bytes = socket.inet_aton(
+                socket.gethostbyname(service_addr))
+        else:
+            self.service_addr_bytes = NULL_IP
+        self.me = uuid.uuid4().bytes
 
     def start(self):
         """Greenlet to start the beaconer.  This sets up zmq context,
         sockets, and spawns worker greenlets.
         """
         self.context = zmq.Context()
-        self.router = self.context.socket(zmq.ROUTER)
-        self.port = self.router.bind_to_random_port(self.endpoint)
-        self.me = uuid.uuid4().bytes
+        self.router = self.context.socket(self.service_socket_type)
+        endpoint = '%s://%s' % (self.service_transport, self.service_addr)
+        self.service_port = self.router.bind_to_random_port(endpoint)
 
         self.broadcaster = socket.socket(
             socket.AF_INET,
@@ -58,7 +85,7 @@ class Beaconer(object):
             socket.SO_REUSEADDR,
             1)
 
-        self.broadcaster.bind(('', self.broadcast_port))
+        self.broadcaster.bind((self.broadcast_addr, self.broadcast_port))
 
         # start all worker greenlets
         gevent.joinall(
@@ -71,28 +98,42 @@ class Beaconer(object):
         """
         while True:
             try:
-                data, addr = self.broadcaster.recvfrom(beacon.size)
+                data, (peer_addr, port) = self.broadcaster.recvfrom(beaconv2.size)
             except socket.error:
                 log.exception('Error recving beacon:')
                 gevent.sleep(self.beacon_interval) # don't busy error loop
                 continue
+            if len(data) == beaconv1.size:
+                continue
             try:
-                greet, ver, peer_id, peer_port = beacon.unpack(data)
+                greet, ver, peer_id, peer_port, peer_transport, \
+                    peer_socket_type, peer_socket_address = beaconv2.unpack(data)
             except Exception:
                 continue
             if greet != 'ZRE':
                 continue
             if peer_id == self.me:
                 continue
-            self.handle_beacon(peer_id, addr[0], peer_port)
+            if peer_socket_address != NULL_IP:
+                peer_addr = socket.inet_ntoa(peer_socket_address)
+            peer_transport = I_TO_T[peer_transport]
+            self.handle_beacon(peer_id, peer_transport, peer_addr,
+                               peer_port, peer_socket_type)
 
     def _send_beacon(self):
         """Greenlet that sends udp beacons at intervals.
         """
         while True:
             try:
+                beacon = beaconv2.pack(
+                    'ZRE', 1, self.me,
+                    self.service_port,
+                    T_TO_I[self.service_transport],
+                    self.service_socket_type,
+                    self.service_addr_bytes)
+
                 self.broadcaster.sendto(
-                    beacon.pack('ZRE', 1, self.me, self.port),
+                    beacon,
                     ('<broadcast>', self.broadcast_port))
             except socket.error:
                 log.exception('Error sending beacon:')
@@ -111,16 +152,16 @@ class Beaconer(object):
         socket.
         """
         while True:
-            self.handle_msg(self.router.recv_multipart())
+            self.handle_msg(*self.router.recv_multipart())
 
-    def handle_beacon(self, peer_id, addr, port):
+    def handle_beacon(self, peer_id, transport, addr, port, socket_type):
         """ Handle a beacon.
 
         Overide this method to handle new peers.  By default, connects
         a DEALER socket to the new peers broadcast endpoint and
         registers it.
         """
-        peer_addr = 'tcp://%s:%s' % (addr, port)
+        peer_addr = '%s://%s:%s' % (transport, addr, port)
         peer = self.peers.get(peer_id)
         if peer and peer.addr == peer_addr:
             self.peers[peer_id] = peer._replace(time=time.time())
