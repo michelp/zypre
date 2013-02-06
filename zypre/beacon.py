@@ -105,11 +105,20 @@ class Beaconer(object):
                 continue
             if len(data) == beaconv1.size:
                 continue
-            try:
-                greet, ver, peer_id, peer_port, peer_transport, \
-                    peer_socket_type, peer_socket_address = beaconv2.unpack(data)
-            except Exception:
-                continue
+                try:
+                    greet, ver, peer_id, peer_port = beaconv2.unpack(data)
+                    peer_transport = 1
+                    peer_socket_type = zmq.ROUTER
+                    peer_socket_address = NULL_IP
+                except Exception:
+                    continue
+            else:
+                try:
+                    greet, ver, peer_id, peer_port, \
+                        peer_transport, peer_socket_type, \
+                        peer_socket_address = beaconv2.unpack(data)
+                except Exception:
+                    continue
             if greet != 'ZRE':
                 continue
             if peer_id == self.me:
@@ -176,7 +185,7 @@ class Beaconer(object):
         peer.setsockopt(zmq.IDENTITY, self.me)
 
         uid = uuid.UUID(bytes=peer_id)
-        log.info('conecting to: %s at %s' % (uid, peer_addr))
+        log.debug('conecting to: %s at %s' % (uid, peer_addr))
         peer.connect(peer_addr)
         self.peers[peer_id] = Peer(peer, peer_addr, time.time())
 
